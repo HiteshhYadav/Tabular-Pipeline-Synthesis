@@ -1,0 +1,302 @@
+/**
+ * Hand-written mirror of backend/app/models.py.
+ *
+ * These types are maintained by hand and will drift from the Pydantic schemas
+ * the moment someone edits one side only. Two mitigations, in order: the field
+ * comments below name their Python counterpart, and once stage 0 stabilises
+ * these should be generated from the OpenAPI schema at /openapi.json rather
+ * than kept in sync manually.
+ *
+ * String union types rather than TypeScript enums throughout, because the wire
+ * format is a string and a TS enum would add a runtime object for no gain.
+ */
+
+// --- Enumerations -----------------------------------------------------------
+
+export type ProblemType =
+  | "binary_classification"
+  | "multiclass_classification"
+  | "regression";
+
+export type Metric =
+  | "accuracy"
+  | "f1"
+  | "f1_macro"
+  | "pr_auc"
+  | "roc_auc"
+  | "rmse"
+  | "mae"
+  | "r2";
+
+export type InferredType =
+  | "boolean"
+  | "datetime"
+  | "numeric_discrete"
+  | "numeric_continuous"
+  | "categorical"
+  | "text"
+  | "unknown";
+
+export type ColumnFlag =
+  | "all_missing"
+  | "high_missing"
+  | "constant"
+  | "quasi_constant"
+  | "id_like"
+  | "high_cardinality"
+  | "numeric_as_string"
+  | "potential_leakage";
+
+/** Which statistic target_association measures. "none" pairs with a null
+ * target_association: either no test applies (text/datetime/unknown feature,
+ * or the target column itself) or too little paired data survived to
+ * compute one. */
+export type AssociationMethod = "spearman" | "eta" | "purity" | "none";
+
+export type ValidationSeverity = "error" | "warning" | "info";
+
+export type JobState =
+  | "pending"
+  | "complete";
+
+// --- Profiling --------------------------------------------------------------
+
+export interface ColumnProfile {
+  name: string;
+  inferred_type: InferredType;
+  pandas_dtype: string;
+  missing_count: number;
+  missing_pct: number;
+  unique_count: number;
+  unique_pct: number;
+  top_value_pct: number | null;
+  /** Level names, categoricals of 20 or fewer levels only, max 5 entries. */
+  sample_values: string[] | null;
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  std: number | null;
+  median: number | null;
+  parse_rate: number | null;
+  target_association: number | null;
+  /** Never a linear correlation. See AssociationMethod. */
+  association_method: AssociationMethod;
+  flags: ColumnFlag[];
+}
+
+export interface ProfileCard {
+  dataset_id: string;
+  filename: string;
+  n_rows: number;
+  n_columns: number;
+  target_column: string;
+  problem_type: ProblemType;
+  task_confidence: number;
+  primary_metric: Metric;
+  /** Always populated. Rendering the primary alone hides how it was chosen. */
+  secondary_metrics: Metric[];
+  class_balance_ratio: number | null;
+  duplicate_row_count: number;
+  profiled_on_sample: boolean;
+  sample_rows: number | null;
+  columns: ColumnProfile[];
+}
+
+// --- Generation result ------------------------------------------------------
+
+export interface DroppedColumn {
+  column: string;
+  reason: string;
+}
+
+export interface PreprocessingStep {
+  step: string;
+  columns: string[];
+  rationale: string;
+}
+
+export interface CandidateModel {
+  name: string;
+  library: string;
+  rationale: string;
+}
+
+/**
+ * Mirrors GenResult. The field order below matches the Python declaration
+ * order, which is load-bearing on the backend. It carries no score field of any
+ * kind and must never gain one: MVP-1 does not execute the generated code, so
+ * any number rendered as a result would be fabricated.
+ */
+export interface GenResult {
+  problem_type: ProblemType;
+  target_column: string;
+  primary_metric: Metric;
+  dropped_columns: DroppedColumn[];
+  preprocessing: PreprocessingStep[];
+  candidate_models: CandidateModel[];
+  validation_strategy: string;
+  analysis_summary: string;
+  risks: string[];
+  code: string;
+}
+
+// --- Validation -------------------------------------------------------------
+
+export interface ValidationCheck {
+  check_id: string;
+  title: string;
+  severity: ValidationSeverity;
+  passed: boolean;
+  message: string;
+  details: string[];
+}
+
+export interface ValidationReport {
+  passed: boolean;
+  error_count: number;
+  warning_count: number;
+  checks: ValidationCheck[];
+}
+
+// --- Error envelope ---------------------------------------------------------
+
+export interface ErrorDetail {
+  code: string;
+  message: string;
+  retryable: boolean;
+  details: Record<string, string>;
+}
+
+export interface ErrorResponse {
+  error: ErrorDetail;
+}
+
+// --- API bodies -------------------------------------------------------------
+
+export interface DatasetUploadResponse {
+  dataset_id: string;
+  filename: string;
+  n_rows: number;
+  n_columns: number;
+  columns: string[];
+  state: JobState;
+}
+
+export interface ProfileRequest {
+  target_column: string;
+  problem_type_override?: ProblemType;
+}
+
+export interface ProfileResponse {
+  state: JobState;
+  profile: ProfileCard;
+}
+
+export interface GenerateResponse {
+  state: JobState;
+  result: GenResult;
+  validation: ValidationReport;
+}
+
+export interface DatasetDetail extends DatasetUploadResponse {
+  created_at: string;
+  task_was_overridden: boolean;
+  profile: ProfileCard | null;
+  pipeline: StoredPipeline | null;
+}
+
+// --- Execution (MVP-1.5) ----------------------------------------------------
+
+/**
+ * One run of the generated pipeline on a sample. stdout is shown verbatim -
+ * it is never parsed into a score, because a figure measured on a few hundred
+ * rows must be read in context, not rendered as a headline number.
+ */
+export interface RunResult {
+  run_id: string;
+  executed_at: string;
+  sample_rows: number;
+  exit_code: number | null;
+  timed_out: boolean;
+  duration_ms: number;
+  stdout: string;
+  stderr: string;
+  stdout_truncated: boolean;
+  stderr_truncated: boolean;
+  succeeded: boolean;
+}
+
+export interface ExecuteResponse {
+  run: RunResult;
+}
+
+/** The pipeline on record for a dataset, as returned by session recovery. */
+export interface StoredPipeline {
+  result: GenResult;
+  validation: ValidationReport;
+  excluded_columns: string[];
+  generated_at: string;
+  latest_run: RunResult | null;
+}
+
+export interface GenerationAttempt {
+  attempt: number;
+  state: string;
+  provider: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  latency_ms: number;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+/** Measured provider usage. This is never a model-quality or performance score. */
+export interface UsageResponse {
+  dataset_id: string;
+  attempts: GenerationAttempt[];
+  total_attempts: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+}
+
+export interface HealthResponse {
+  status: string;
+  version: string;
+  execution_enabled: boolean;
+  execution_sample_rows: number | null;
+  auth_required: boolean;
+}
+
+// --- Distributions (Profile screen charts) ----------------------------------
+
+/** For the user's eyes only. Never part of ProfileCard, never sent to the model. */
+export interface HistogramBin {
+  lower: number;
+  upper: number;
+  count: number;
+}
+
+export interface LevelCount {
+  value: string;
+  count: number;
+}
+
+export type DistributionKind = "histogram" | "levels" | "none";
+
+export interface ColumnDistribution {
+  name: string;
+  kind: DistributionKind;
+  bins: HistogramBin[];
+  levels: LevelCount[];
+  other_count: number;
+  missing_count: number;
+  reason: string | null;
+}
+
+export interface DistributionsResponse {
+  dataset_id: string;
+  n_rows: number;
+  columns: ColumnDistribution[];
+}

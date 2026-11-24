@@ -1,0 +1,4 @@
+# Store text as LF everywhere. CI runs on Linux, and the CSV fixtures and
+# recorded cassettes must read identically on every platform.
+* text=auto eol=lf
+*.png binary

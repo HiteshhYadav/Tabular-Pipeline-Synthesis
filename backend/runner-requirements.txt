@@ -1,0 +1,11 @@
+# The runner venv (backend/.venv-runner) for MVP-1.5 local execution.
+#
+# Deliberately separate from the API's own environment: generated pipelines
+# import scikit-learn, the API never does, and keeping the two apart is what
+# makes the phase-2 container boundary a swap rather than a rewrite.
+#
+# pandas carries the same <3 pin as pyproject.toml, for the same reason: the
+# profiler and the generated code must read the CSV identically.
+pandas>=2.2,<3
+numpy>=2.1
+scikit-learn>=1.5
