@@ -102,7 +102,7 @@ That matters for three reasons:
 
 ## What are the "checks"?
 
-Before you see the code, we parse it and verify twelve things. The important
+Before you see the code, we parse it and verify thirteen things. The important
 ones, in plain terms:
 
 | We check | Because |

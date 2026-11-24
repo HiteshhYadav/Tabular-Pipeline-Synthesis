@@ -47,6 +47,33 @@ jobs:
       # pipelines executed inside the container.
       - run: python -m pytest tests/test_execution.py -rs
 
+  # Builds the production images exactly as docker compose would and checks
+  # the stack comes up healthy through nginx. A production install has no dev
+  # extras, so this is the only job that would catch a runtime dependency
+  # that only ever arrived through the dev install - which happened (httpx).
+  deploy-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp backend/.env.example backend/.env
+      - run: docker compose up --build -d --wait --wait-timeout 180
+      - name: Health and SPA routing through nginx
+        run: |
+          curl -fsS http://localhost:8080/api/health
+          curl -fsS -o /dev/null http://localhost:8080/
+          curl -fsS -o /dev/null http://localhost:8080/pipeline
+      - name: Upload and profile through the proxy
+        run: |
+          printf 'id,amount,plan,churn\n' > /tmp/smoke.csv
+          for i in $(seq 1 60); do echo "$i,$((i*3)),$([ $((i%3)) = 0 ] && echo gold || echo basic),$([ $((i%4)) = 0 ] && echo yes || echo no)" >> /tmp/smoke.csv; done
+          id=$(curl -fsS -F "file=@/tmp/smoke.csv" http://localhost:8080/api/datasets | python3 -c 'import sys,json; print(json.load(sys.stdin)["dataset_id"])')
+          curl -fsS -H 'Content-Type: application/json' -d '{"target_column":"churn"}' "http://localhost:8080/api/datasets/$id/profile" > /dev/null
+          curl -fsS "http://localhost:8080/api/datasets/$id/distributions" > /dev/null
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

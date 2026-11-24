@@ -1,7 +1,26 @@
 # AutoNexus
 
+[![CI](https://github.com/HiteshhYadav/Tabular-Pipeline-Synthesis/actions/workflows/ci.yml/badge.svg)](https://github.com/HiteshhYadav/Tabular-Pipeline-Synthesis/actions/workflows/ci.yml)
+
 Upload a CSV, get back a machine-learning pipeline written for it, plus an
 honest account of why, and what was checked.
+
+**Quick start** - the whole app in containers, one command:
+
+```bash
+cp backend/.env.example backend/.env     # then set GOOGLE_API_KEY
+docker compose up --build                # open http://localhost:8080
+```
+
+Or run it for development without Docker - see [Installation](#installation).
+
+| | |
+|---|---|
+| **Core rule** | Python computes facts, the LLM reasons over facts, the LLM never sees raw rows |
+| **Pipeline** | Upload -> deterministic profile -> Gemini strategy + code -> 13 static checks (+ one automatic repair round) -> optional sandboxed run on a sample |
+| **Status** | All eight stages of [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) complete - see [Implementation plan status](#implementation-plan-status) |
+| **Tests** | 362 backend (pytest) + 27 frontend (Vitest), run in CI on every push, including live Docker-sandbox tests |
+| **Verified on real data** | Three public CSVs with real traps, end to end against live Gemini - see [docs/stage7-real-world-run.md](docs/stage7-real-world-run.md) |
 
 ## What is AutoNexus?
 
@@ -26,7 +45,7 @@ class balance, and a leakage association score per column. The LLM reasons
 over those facts and returns a structured strategy (what to drop, how to
 preprocess, which models to try, how to validate) followed by the Python code
 that implements exactly that strategy. Before you see it, that code is
-statically checked - never executed - against a dozen rules: does it parse,
+statically checked - never executed - against thirteen rules: does it parse,
 does it import only approved libraries, does it reference real columns, does
 it match the strategy it just described.
 
@@ -68,6 +87,26 @@ score, by design. When you do run a pipeline locally, its printed output is
 shown verbatim under "Executed on a N-row sample" and is never parsed into a
 headline number - see [Known Limitations](#known-limitations).
 
+## Implementation plan status
+
+Every stage of [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md), with where
+to see it:
+
+| Stage | Plan says | Where it is |
+|---|---|---|
+| 0 Walking skeleton | Schemas final, routes, four screens, CORS | `models.py`, `types.ts` (drift-checked by `test_types_contract.py`), five screens |
+| 1 Ingest | Streaming size check, duplicate-column reject, shape checks, WAL, TTL | `ingest.py`, `storage.py`, `errors.py` |
+| 2 Profiler | Constants-only `heuristics.py`, 7-rung dtype ladder, flags, task inference, metrics, leakage, sampling | `heuristics.py`, `dtypes.py`, `profiler.py`, `metrics.py`, `leakage.py`, 16 fixture CSVs |
+| 3 LLM | Prompt, `LLMProvider`, structured output, 429/timeout/malformed handling, cassettes | `prompts.py`, `llm.py`, `tests/cassettes/` |
+| 4 Validation | compile, import allowlist, dangerous calls, hallucinated columns, self-consistency, structural warnings, fixture corpus | `validation.py` (13 checks), `tests/fixtures/validation_corpus.py` |
+| 5 Frontend | All screens, loading/error/retry, copy/download, persistent "not executed" label | `frontend/src/` |
+| 6 MVP-1.5 execution | Subprocess sandbox, 500-row sample, process-group kill, boot guard | `execution.py`, `.venv-runner`, plus the phase-2 `DockerSandbox` |
+| 7 Hardening and docs | Stubbed-provider API tests, two ADRs, README with runner venv, prompt-injection line, three real messy CSVs | `test_api.py`, `docs/adr/`, this README, `prompts.py`, [`docs/stage7-real-world-run.md`](docs/stage7-real-world-run.md) |
+
+Beyond the plan's eight stages, everything that was on the roadmap is also
+built: distribution charts, access tokens and rate limiting, the Docker
+sandbox, frontend tests, CI, and container deployment.
+
 ## Current Status
 
 This repository has no standalone SRS or design PDF committed to it. The
@@ -94,7 +133,7 @@ not against an external file that does not exist in this repo.
 - LLM strategy and pipeline generation via Gemini structured output, with API
   key rotation across a 429 and one automatic repair attempt on malformed
   output
-- Twelve static validation checks against the generated code (see
+- Thirteen static validation checks against the generated code (see
   [Validation](#validation)), plus **one automatic repair round** when an
   error-severity check fails: the model is told exactly which checks failed
   and why, and the better of the two results is shown with its real report
@@ -121,7 +160,7 @@ not against an external file that does not exist in this repo.
   runs and general requests, and a token prompt in the frontend
 - SQLite persistence with WAL mode and an hourly TTL sweep (24h default) that
   removes a dataset's generations, pipeline and runs along with it
-- 321 backend tests (pytest, `ruff check` clean) and 27 frontend tests
+- 362 backend tests (pytest, `ruff check` clean) and 27 frontend tests
   (Vitest + Testing Library), run in CI on every push and pull request
 
 ### Not implemented
@@ -151,9 +190,9 @@ not against an external file that does not exist in this repo.
 - **Multi-worker deployment.** Rate-limit windows and the one-generation-per-
   dataset guard live in process memory, which is correct for the single
   worker this app runs as. Several workers would each keep their own.
-- **Deployment packaging for the API itself.** There is a Docker image for
-  the *execution sandbox*, not for the API or frontend, and no
-  docker-compose file.
+- **Managed TLS and secrets.** The compose stack serves plain HTTP on one
+  port; TLS termination and secret storage are the host's job (see
+  [Deploying](#deploying)).
 - **BigQuery, WebSockets.** No reference to either anywhere in the codebase;
   not part of this architecture.
 
@@ -165,44 +204,35 @@ and the remaining backlog, ranked, is in
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    UI["React + Vite frontend<br/>five screens, one useReducer"] -->|"JSON over HTTP<br/>(nginx /api proxy in deployment)"| SEC
+    SEC["security.py<br/>bearer token + per-client rate limits"] --> ING
+    ING["ingest.py<br/>streamed size cap, duplicate headers,<br/>C-engine parse, shape checks"] --> PROF
+    PROF["profiler.py + dtypes.py + leakage.py + metrics.py<br/>deterministic facts: types, missingness,<br/>leakage score, task, metric"] --> CARD
+    PROF --> DIST["distributions.py<br/>charts for the user only"]
+    CARD[["ProfileCard<br/>the ONLY thing the LLM sees"]] --> LLM
+    LLM["llm.py + prompts.py<br/>Gemini structured output,<br/>key rotation, schema repair"] --> GEN
+    GEN[["GenResult<br/>strategy fields, THEN code"]] --> VAL
+    VAL["validation.py<br/>13 static checks, never executes"] -->|"error-severity failure"| REP["one check-repair round<br/>failing checks sent back"]
+    REP --> LLM
+    VAL --> STORE[("SQLite, WAL<br/>24h TTL")]
+    STORE -->|"optional: ENABLE_LOCAL_EXECUTION"| EXE
+    EXE["execution.py<br/>safety preflight, 500-row sample"] --> SUB["subprocess sandbox<br/>local only"]
+    EXE --> DOCK["Docker sandbox<br/>no network, read-only, non-root"]
+    DIST --> UI
+    STORE --> UI
 ```
-  React / Vite (TypeScript)
-          |
-          v  fetch, JSON over HTTP
-  FastAPI  (backend/app/main.py)
-          |
-          v
-  CSV ingestion            backend/app/ingest.py
-  (stream size check, duplicate-header check, parse, shape check, memory check)
-          |
-          v
-  Profiler                 backend/app/profiler.py, dtypes.py, leakage.py, metrics.py
-  (per-column stats, task inference, metric selection - all deterministic)
-          |
-          v
-  ProfileCard               backend/app/models.py
-  (the ONLY object the LLM layer ever sees - never a DataFrame)
-          |
-          v
-  LLM provider               backend/app/llm.py, prompts.py
-  (Gemini, structured output, key rotation, one repair attempt)
-          |
-          v
-  GenResult                 backend/app/models.py
-  (strategy fields, THEN code - field order is load-bearing)
-          |
-          v
-  Static validation          backend/app/validation.py
-  (AST-only: parses, checks, never executes; one repair round on an error)
-          |
-          v  (optional, ENABLE_LOCAL_EXECUTION=true, DEPLOYMENT_ENV=local only)
-  Local execution            backend/app/execution.py
-  (safety preflight -> 500-row sample -> separate .venv-runner process)
-          |
-          v
-  React screens               frontend/src/screens/
-  (Upload -> Target -> Profile -> Strategy -> Pipeline)
-```
+
+Request by request:
+
+| Step | Module | Guarantee |
+|---|---|---|
+| Upload | `ingest.py` | Size refused while streaming; duplicate headers refused before pandas can mangle them |
+| Profile | `profiler.py`, `dtypes.py`, `leakage.py`, `metrics.py` | Pure Python, deterministic, every threshold a named constant in `heuristics.py` |
+| Generate | `llm.py`, `prompts.py` | Accepts a `ProfileCard`, never a DataFrame; strategy is generated before code |
+| Validate | `validation.py` | AST only; a failure is shown beside the code, never instead of it |
+| Run (optional) | `execution.py` | Only server-generated code; sample of 500 rows; killed on timeout |
 
 The core rule that shapes every layer above: **Python computes facts, the LLM
 reasons over facts, the LLM never sees raw data.** `llm.py`'s entry point
@@ -246,14 +276,15 @@ backend/
     prompts.py        System prompt + ProfileCard -> LLM prompt serialization
     llm.py            LLMProvider protocol, GeminiProvider, key rotation, both repair rounds
     storage.py        SQLite persistence and the TTL sweeper
-    validation.py      Twelve static checks on generated code
+    validation.py      Thirteen static checks on generated code
     execution.py       MVP-1.5: safety preflight, sampling, Sandbox protocol, LocalSubprocessSandbox, DockerSandbox
     distributions.py   Histogram / level-count chart data (never part of ProfileCard or the prompt)
     security.py        Bearer-token check and per-client rate limits
-  tests/               321 tests: fixture-corpus-driven, cassette-backed LLM tests, real-subprocess and container sandbox tests
+  tests/               362 tests: fixture-corpus-driven, cassette-backed LLM tests, real-subprocess and container sandbox tests
   pyproject.toml
   runner-requirements.txt  What the separate .venv-runner and the sandbox image get (pandas<3, numpy, scikit-learn)
   runner.Dockerfile        The Docker execution sandbox image
+  Dockerfile               The API image (docker compose)
   .env.example
 
 frontend/
@@ -274,6 +305,8 @@ frontend/
       pipeline/            CodeBlock, ValidationChecklist, ValidationCheckRow, UnexecutedNotice, ExecutionPanel
       shared/              Button, Card, StatusBadge, ErrorPanel, RetryButton, AccessTokenPanel, icons
     *.test.ts(x), test/  Vitest suites and typed fixtures
+  Dockerfile           Production build served by nginx
+  nginx.conf           SPA routing, /api proxy, security headers
   package.json
   .env.example
 
@@ -284,9 +317,11 @@ docs/
   spike-01-gemini-structured-output.md          Why field order / nested schemas behave the way they do on Gemini
   adr/0001-llm-reasons-over-computed-facts.md   Why the LLM only ever sees a ProfileCard
   adr/0002-execution-boundary.md                Why execution is off by default, and how MVP-1.5 contains it
+  stage7-real-world-run.md                      Three real CSVs end to end: what passed, what broke, what was fixed
   Agentic_AutoML_Apple_HIG_Design_System.md     The frontend's governing design spec
 
-.github/workflows/ci.yml  Backend, Docker-sandbox and frontend jobs
+docker-compose.yml       The deployable stack: api + web (nginx), one published port
+.github/workflows/ci.yml  Backend, Docker-sandbox, deploy-smoke and frontend jobs
 IMPLEMENTATION_PLAN.md   Frozen architecture + the eight-stage build order this project followed
 CLAUDE.md                 Binding rules for any contributor (human or AI) working in this repo
 ```
@@ -443,6 +478,51 @@ succeeded on the server.
 Health check: `curl http://localhost:8000/api/health` should return
 `{"status": "ok", "version": "...", "execution_enabled": false, ...}`.
 
+## Deploying
+
+The repository ships a production stack: `docker-compose.yml` at the root,
+`backend/Dockerfile` (API) and `frontend/Dockerfile` (static build served by
+nginx, which also proxies `/api`).
+
+```bash
+cp backend/.env.example backend/.env    # set GOOGLE_API_KEY (and API_TOKENS if hosted)
+docker compose up --build -d
+docker compose ps                        # both services report (healthy)
+```
+
+Open **http://localhost:8080** (change with `AUTONEXUS_PORT=...`).
+
+What you get:
+
+- **One origin.** nginx serves the app and proxies `/api` to the API
+  container, so the browser needs no CORS and the API port is never published.
+- **Health checks** on both containers; the web container waits for the API.
+- **A named volume** (`autonexus-data`) for the SQLite database and uploads,
+  swept on the same 24-hour TTL. `docker compose down` keeps it;
+  `docker compose down -v` deletes it.
+- **Non-root API process**, a single uvicorn worker (rate-limit windows are in
+  memory), and `X-Forwarded-For` overwritten by nginx so per-client limits
+  count the real client - a spoofed header cannot dodge them.
+- **Security headers** (`nosniff`, `DENY` framing, `no-referrer`) and long
+  cache lifetimes for hashed assets only.
+
+**Exposing it beyond your machine:**
+
+1. In `backend/.env`: `DEPLOYMENT_ENV=hosted` and `API_TOKENS=<one or more
+   long random tokens>`. The API refuses to start in hosted mode without
+   tokens. Share a token with each user; the app asks for it once.
+2. Put a TLS-terminating reverse proxy (Caddy, Traefik, a cloud load
+   balancer) in front of port 8080. Bearer tokens over plain HTTP can be read
+   on the wire.
+3. Leave execution off unless you need it. The compose stack sets
+   `ENABLE_LOCAL_EXECUTION=false`. Enabling it there means
+   `EXECUTION_BACKEND=docker` plus mounting the host's Docker socket into the
+   API container, which is root-equivalent access to the host - a decision to
+   make deliberately, not a default.
+
+Updating is `git pull && docker compose up --build -d`; logs are
+`docker compose logs -f api`.
+
 ## How to Use
 
 1. **Upload a CSV.** Drag a file onto the dropzone, or click to browse. The
@@ -463,7 +543,7 @@ Health check: `curl http://localhost:8000/api/health` should return
    retained column needs, two to four candidate models ranked by fit for
    this dataset, and how the result should be validated - all grounded in
    the profile, never in a number that was never measured.
-5. **Review the pipeline code.** The strategy's code, with the twelve-check
+5. **Review the pipeline code.** The strategy's code, with the thirteen-check
    validation report shown above it, not below it. A banner states plainly
    that the pipeline has not been executed. Copy or download the code and
    run it yourself in your own environment - or, with local execution on,
@@ -704,7 +784,7 @@ readable via `GET /datasets/{id}/usage`.
 
 ## Validation
 
-Twelve checks run against every generated result, all static - none of them
+Thirteen checks run against every generated result, all static - none of them
 execute the code. If the code fails to parse, only the two checks that read
 `GenResult`/`ProfileCard` directly still run; every AST-based check is
 skipped rather than reported as passing.
@@ -714,6 +794,7 @@ skipped rather than reported as passing.
 | `syntax_compile` | Error | The code fails to `compile()` - a syntax error |
 | `ast_import_allowlist` | Error | Any import outside pandas, numpy, or scikit-learn |
 | `dangerous_calls` | Error | Calls to `eval`, `exec`, `compile`, `__import__`, `os.system`, or anything rooted at `subprocess`, `socket`, `requests`, `urllib` |
+| `removed_sklearn_api` | Error | scikit-learn APIs removed in a supported release - `squared=` on `mean_squared_error`, `sparse=` on `OneHotEncoder`, `base_estimator=`, `max_features="auto"`, the old `plot_*` helpers - each with its replacement. Added after the [stage 7 real-world run](docs/stage7-real-world-run.md) caught it live |
 | `hallucinated_columns` | Error | A string used as a column reference that is not a real profile column, not self-defined by the code, and close enough to a real name (fuzzy-match ratio ≥0.85) to be a plausible typo rather than an engineered feature name |
 | `target_column_referenced` | Error | The target column name never appears anywhere in the code |
 | `gen_result_self_consistency` | Error | The strategy's stated problem type, target column, or primary metric does not match what the profiler computed |
@@ -812,7 +893,7 @@ stage 6 = MVP-1.5; unplanned items from
 | Metric selection | ✅ Complete | `metrics.py` |
 | Metric override | ❌ Not implemented | Only task type is overridable |
 | LLM strategy + code generation | ✅ Complete | Structured output, `GenResult` |
-| Static validation (12 checks) | ✅ Complete | See [Validation](#validation) |
+| Static validation (13 checks) | ✅ Complete | See [Validation](#validation) |
 | 5-screen frontend | ✅ Complete | Incl. real URLs, session recovery |
 | Dataset/profile/pipeline recovery (`GET`) | ✅ Complete | Pipeline, report and latest run survive a refresh |
 | Usage/quota visibility | ✅ Complete | |
@@ -888,13 +969,16 @@ re-recording (see [Testing](#testing)) only has to happen once per phase:
 Everything on the previous version of this list is done: large-dataset
 sampling tests, the repair-on-failed-check loop, MVP-1.5 local execution,
 distribution charts, the Docker sandbox, access tokens and rate limiting,
-frontend tests and CI. What would come next, if the scope grows:
+frontend tests and CI, container deployment, and the stage 7 real-world run.
+What would come next, if the scope grows:
 
 1. **User accounts and per-user dataset ownership** - replacing shared tokens,
    so a token holder can only see their own uploads.
 2. **A shared store for rate limits** - only needed for more than one worker.
-3. **Deployment packaging for the API** - an image and compose file for the
-   API and frontend themselves, alongside the existing sandbox image.
+3. **A prompt note on removed scikit-learn APIs** - only if the
+   `removed_sklearn_api` repair round turns out to fire on most regression
+   generations; it costs a cassette re-record. See
+   [docs/stage7-real-world-run.md](docs/stage7-real-world-run.md).
 
 ## Testing
 
@@ -902,7 +986,7 @@ frontend tests and CI. What would come next, if the scope grows:
 
 ```bash
 cd backend
-.venv/bin/python -m pytest        # 326 passed with Docker up (321 + 5 skipped without it)
+.venv/bin/python -m pytest        # 362 passed with Docker up (357 + 5 skipped without it)
 .venv/bin/ruff check app tests    # clean, as of this writing
 ```
 
@@ -920,6 +1004,10 @@ is built. CI builds the image and runs them on every push.
 To re-record cassettes after a prompt-affecting change (costs one Gemini
 request per changed cassette; stale ones are pruned):
 `.venv/bin/python -m tests.record_cassettes`.
+
+`tests/test_types_contract.py` parses `frontend/src/types.ts` and fails if
+any interface or string union has drifted from its Pydantic model or enum -
+the hand-written mirror cannot silently fall out of step.
 
 Tests are fixture-corpus-driven: profiler and validator changes require a
 named fixture CSV (`tests/fixtures/`) or a code-string fixture
@@ -952,11 +1040,14 @@ only verbatim, chart text alternatives, and the token prompt.
 
 **CI** (`.github/workflows/ci.yml`) runs on every push and pull request:
 backend lint and tests, a Docker job that builds the runner image and runs
-the live container tests, and frontend tests plus build. No secrets needed.
+the live container tests, a deploy-smoke job that builds the production
+images with `docker compose`, waits for both health checks, and uploads and
+profiles a file through nginx, and frontend tests plus build. No secrets
+needed.
 
 ## Security Notes
 
-- **Generated code is not executed by default.** The twelve checks in
+- **Generated code is not executed by default.** The thirteen checks in
   [Validation](#validation) are static analysis only - they reduce the
   chance that code you choose to run yourself does something obviously
   unsafe, but they are not a sandbox and were never designed as one.

@@ -34,6 +34,7 @@ _FAIL_CHECK_IDS = {
     "syntax_compile",
     "ast_import_allowlist",
     "dangerous_calls",
+    "removed_sklearn_api",
     "hallucinated_columns",
     "target_column_referenced",
     "gen_result_self_consistency",

@@ -1,6 +1,6 @@
 /**
  * The full static-check report. Every check in ValidationReport.checks is
- * rendered - passes included - because "12 checks ran and all passed" is a
+ * rendered - passes included - because "13 checks ran and all passed" is a
  * different and much stronger statement than "no problems shown".
  *
  * Reduced motion comes from framer-motion's useReducedMotion rather than the

@@ -142,6 +142,86 @@ def _check_dangerous_calls(tree: ast.AST) -> ValidationCheck:
 
 
 # ---------------------------------------------------------------------------
+# Removed scikit-learn APIs
+#
+# Language models learn scikit-learn from years of code, much of it older
+# than the version the code will run on. Found in the stage 7 real-world run:
+# a generation for a regression target called
+# mean_squared_error(y, p, squared=False), passed every other check, and
+# crashed on contact with scikit-learn 1.9. Each rule below is an API that
+# was removed (not merely deprecated) in a release the runner's
+# `scikit-learn>=1.5` pin can install, so the code is provably broken there.
+# ERROR severity on purpose: it routes the failure into the repair round,
+# whose prompt names the replacement.
+# ---------------------------------------------------------------------------
+
+# (callee name suffix, keyword) -> replacement advice
+_REMOVED_KEYWORDS: dict[tuple[str, str], str] = {
+    ("mean_squared_error", "squared"): (
+        "squared= was removed in scikit-learn 1.6; use root_mean_squared_error"
+    ),
+    ("mean_squared_log_error", "squared"): (
+        "squared= was removed in scikit-learn 1.6; use root_mean_squared_log_error"
+    ),
+    ("OneHotEncoder", "sparse"): (
+        "sparse= was removed in scikit-learn 1.4; use sparse_output="
+    ),
+}
+# Keywords removed from every estimator that had them.
+_REMOVED_ANY_KEYWORD = {
+    "base_estimator": "base_estimator= was removed in scikit-learn 1.4; use estimator=",
+}
+_REMOVED_METRIC_IMPORTS = {
+    "plot_confusion_matrix": "removed in scikit-learn 1.2; use ConfusionMatrixDisplay",
+    "plot_roc_curve": "removed in scikit-learn 1.2; use RocCurveDisplay",
+    "plot_precision_recall_curve": "removed in scikit-learn 1.2; use PrecisionRecallDisplay",
+}
+
+
+def _check_removed_sklearn_api(tree: ast.AST) -> ValidationCheck:
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            dotted = _dotted_call_name(node.func)
+            callee = dotted.rsplit(".", 1)[-1] if dotted else None
+            for keyword in node.keywords:
+                if keyword.arg is None:
+                    continue
+                advice = _REMOVED_KEYWORDS.get((callee or "", keyword.arg)) or (
+                    _REMOVED_ANY_KEYWORD.get(keyword.arg)
+                )
+                if (
+                    advice is None
+                    and keyword.arg == "max_features"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value == "auto"
+                ):
+                    advice = 'max_features="auto" was removed in scikit-learn 1.3; use "sqrt"'
+                if advice:
+                    offenders.append(f"line {node.lineno}: {callee}({keyword.arg}=...) - {advice}")
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("sklearn"):
+            for alias in node.names:
+                if alias.name in _REMOVED_METRIC_IMPORTS:
+                    offenders.append(
+                        f"line {node.lineno}: {alias.name} - {_REMOVED_METRIC_IMPORTS[alias.name]}"
+                    )
+    passed = not offenders
+    return ValidationCheck(
+        check_id="removed_sklearn_api",
+        title="Uses current scikit-learn APIs",
+        severity=ValidationSeverity.ERROR,
+        passed=passed,
+        message=(
+            "No scikit-learn API that has been removed in a supported release."
+            if passed
+            else "These calls use scikit-learn APIs that no longer exist and will crash: "
+            + "; ".join(offenders)
+        ),
+        details=offenders,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Column literal extraction
 #
 # Shared with tests/test_llm.py's cassette checks - moved here so there is
@@ -633,6 +713,7 @@ def validate(
     if tree is not None:
         checks.append(_check_import_allowlist(tree))
         checks.append(_check_dangerous_calls(tree))
+        checks.append(_check_removed_sklearn_api(tree))
         checks.append(_check_hallucinated_columns(tree, profile))
         checks.append(_check_target_referenced(tree, profile.target_column))
 

@@ -192,6 +192,36 @@ CORPUS = [
         frozenset({"ast_import_allowlist"}),
     ),
     CorpusEntry(
+        # Observed live in the stage 7 run on taxis.csv: passed every other
+        # check, crashed on scikit-learn 1.9.
+        "removed_squared_kwarg",
+        _with_code(
+            GOOD_CODE
+            + "\nfrom sklearn.metrics import mean_squared_error\n"
+            + "print(mean_squared_error(y_test, preds, squared=False))\n"
+        ),
+        frozenset({"removed_sklearn_api"}),
+    ),
+    CorpusEntry(
+        "removed_onehot_sparse_kwarg",
+        _with_code(
+            GOOD_CODE.replace(
+                'OneHotEncoder(handle_unknown="ignore")',
+                'OneHotEncoder(handle_unknown="ignore", sparse=False)',
+            )
+        ),
+        frozenset({"removed_sklearn_api"}),
+    ),
+    CorpusEntry(
+        "removed_max_features_auto",
+        _with_code(
+            GOOD_CODE
+            + "\nfrom sklearn.ensemble import RandomForestClassifier\n"
+            + 'rf = RandomForestClassifier(max_features="auto", random_state=0)\n'
+        ),
+        frozenset({"removed_sklearn_api"}),
+    ),
+    CorpusEntry(
         "exec_call",
         _with_code(GOOD_CODE + '\nexec("print(1)")\n'),
         frozenset({"dangerous_calls"}),

@@ -69,7 +69,7 @@ export function ValidationCheckRow({
         animate={{ opacity: 1, y: 0 }}
         transition={{
           duration: 0.25,
-          // Capped so a twelve-row report never feels slow to finish arriving.
+          // Capped so a thirteen-row report never feels slow to finish arriving.
           delay: reducedMotion ? 0 : Math.min(index, 10) * 0.028,
           ease: EASE_SETTLE,
         }}

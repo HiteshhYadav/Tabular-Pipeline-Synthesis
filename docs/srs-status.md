@@ -38,7 +38,7 @@ implemented, deliberately (see `not-building.md`)
 | Preprocessing strategy | ✅ | `GenResult.preprocessing`, LLM-authored, grounded in profile facts | - |
 | Candidate model selection | ✅ | `GenResult.candidate_models`, 2-4, no score field | - |
 | Validation-strategy description | ✅ | `GenResult.validation_strategy`, prose, not executed | - |
-| Static code validation (12 checks) | ✅ | `validation.py` - see README's Validation section for the full list | - |
+| Static code validation (13 checks) | ✅ | `validation.py` - see README's Validation section for the full list | - |
 | Invented-column detection | ✅ | `hallucinated_columns` check, fuzzy-match against real names | - |
 | Strategy/code self-consistency | ✅ | `gen_result_self_consistency` check | - |
 | One automatic repair attempt (schema failure) | ✅ | `llm.py::generate`, `MAX_ATTEMPTS = 2` | - |
@@ -63,13 +63,13 @@ implemented, deliberately (see `not-building.md`)
 | Database persistence | ✅ | SQLite, `storage.py` | - |
 | SQLite WAL mode | ✅ | `storage.py::connect` sets `PRAGMA journal_mode=WAL` | - |
 | TTL cleanup | ✅ | Hourly sweep + boot-time sweep, `DATASET_TTL_HOURS` | - |
-| Backend test suite | ✅ | 321 tests, pytest, fixture-corpus-driven, real-subprocess sandbox tests | - |
+| Backend test suite | ✅ | 362 tests, pytest, fixture-corpus-driven, real-subprocess sandbox tests | - |
 | Large-dataset sampling coverage | ✅ | Frames above 200,000 rows built at test time: sampling engages, column stats stay exact, leakage still caught, deterministic | - |
 | Frontend test suite | ✅ | Vitest + Testing Library, 27 tests: reducer invariants, API client, rendering contracts | - |
 | Security testing | 🟡 | Static validation and execution preflight for generated code; auth, rate-limit, boot-guard and container-isolation tests; no dependency scanning, no formal pen test | See Security Notes in README |
 | Performance / load testing | ❌ | None | Not started |
 | CI/CD | ✅ (CI) | `.github/workflows/ci.yml`: backend lint+tests, Docker sandbox build + live container tests, frontend tests+build | No CD |
-| Deployment tooling (Docker, compose) | 🟡 | Docker image for the execution sandbox only | No image or compose file for the API/frontend |
+| Deployment tooling (Docker, compose) | ✅ | `docker-compose.yml`, `backend/Dockerfile`, `frontend/Dockerfile` + `nginx.conf`, plus the sandbox image; verified healthy end to end | TLS is the host's reverse proxy |
 | Multi-target prediction | ❌* | - | Deliberately out - see `not-building.md` #2 |
 | Unsupervised learning | ❌* | - | Deliberately out - see `not-building.md` #3 |
 | User-chosen algorithms/hyperparameters | ❌* | - | Deliberately out - see `not-building.md` #4 |
@@ -90,7 +90,8 @@ implemented, deliberately (see `not-building.md`)
 Everything previously ranked here is done: large-dataset sampling tests,
 the repair-on-failed-check loop, MVP-1.5 local execution, distribution
 charts, the Docker execution sandbox, access tokens and rate limiting,
-frontend tests and CI.
+frontend tests and CI, container deployment, and the stage 7 real-world run
+(`docs/stage7-real-world-run.md`).
 
 If the scope grows, in this order:
 
@@ -98,8 +99,9 @@ If the scope grows, in this order:
    strangers out but let any token holder reach any dataset id they learn.
 2. **A shared rate-limit store.** Only needed for more than one worker; the
    in-process windows are correct for the single worker this app runs as.
-3. **Deployment packaging for the API and frontend.** An image and a compose
-   file beside the existing sandbox image.
+3. **A prompt note on removed scikit-learn APIs.** Only if the
+   `removed_sklearn_api` repair round fires on most regression generations;
+   the validator already catches it deterministically.
 
 ## Explicitly not recommended
 

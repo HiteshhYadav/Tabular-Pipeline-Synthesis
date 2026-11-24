@@ -1,0 +1,41 @@
+# One command to run the whole app:
+#
+#   docker compose up --build
+#
+# then open http://localhost:8080. Only the web container publishes a port;
+# the API is reachable solely through nginx's /api proxy.
+#
+# Configuration comes from backend/.env (copy backend/.env.example). The
+# values below override it where the container layout requires it.
+
+services:
+  api:
+    build: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      DB_PATH: /app/data/app.db
+      UPLOAD_DIR: /app/data/uploads
+      CORS_ORIGINS: http://localhost:8080
+      # Execution stays off in this stack by default. The subprocess runner
+      # venv does not exist inside the image, and the Docker sandbox would
+      # need the host's Docker socket mounted into this container, which is
+      # root-equivalent access to the host. Enable it deliberately, if at
+      # all - see "Deploying" in the README.
+      ENABLE_LOCAL_EXECUTION: "false"
+    volumes:
+      - autonexus-data:/app/data
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    ports:
+      - "${AUTONEXUS_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  autonexus-data:

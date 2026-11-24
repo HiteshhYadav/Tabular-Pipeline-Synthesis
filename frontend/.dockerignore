@@ -1,0 +1,8 @@
+# Platform-specific node_modules must be installed inside the image, and no
+# local .env may override the same-origin API base set in the Dockerfile.
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo

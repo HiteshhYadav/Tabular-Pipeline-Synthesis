@@ -72,7 +72,7 @@ _THREAD_ENV = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "LO
 #
 # validation.py's checks were written for code a human will read before
 # running. Code this server is about to run itself deserves a stricter screen,
-# kept here rather than in validation.py so that the twelve-check report the
+# kept here rather than in validation.py so that the thirteen-check report the
 # user sees stays exactly what it was, and so the validation corpus tests are
 # untouched.
 
